@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type NoteRepository struct {
@@ -18,8 +19,20 @@ func NewNoteRepository(collection *mongo.Collection) *NoteRepository {
 }
 
 func (r *NoteRepository) SaveNote(note models.Note) error {
-	note.CreatedAt = time.Now()
-	_, err := r.collection.InsertOne(context.Background(), note)
+	filter := bson.M{"team_id": note.TeamID} // team_id 기준으로 문서 검색
+	update := bson.M{
+		"$set": bson.M{
+			"note":       note.Note,
+			"created_at": time.Now(),
+		},
+	}
+
+	_, err := r.collection.UpdateOne(
+		context.Background(),
+		filter,
+		update,
+		options.Update().SetUpsert(true),
+	)
 	return err
 }
 
