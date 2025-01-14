@@ -6,6 +6,7 @@ import (
 	"go-server/repository"
 	"go-server/routes"
 	service "go-server/services"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -34,5 +35,8 @@ func main() {
 	routes.NoteRoutes(app, noteController)
 	routes.WebSocketRoutes(app, wsController)
 
-	app.Listen(":4000")
+	log.Println("Starting server on port 4000...")
+	if err := app.Listen(":4000"); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 }
