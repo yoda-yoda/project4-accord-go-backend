@@ -5,17 +5,25 @@ import (
 	"go-server/controllers"
 	"go-server/repository"
 	"go-server/routes"
+	service "go-server/services"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 func main() {
+
+	redisClient := configs.ConnectRedis()
+	participantRepo := repository.NewRedisParticipantRepository(redisClient)
+	participantService := service.NewParticipantService(participantRepo)
+
 	client := configs.ConnectMongo()
 	collection := client.Database("mydb").Collection("notes")
 
 	noteRepo := repository.NewNoteRepository(collection)
 	noteController := controllers.NewNoteController(noteRepo)
+
+	wsController := controllers.NewWebSocketController(participantService)
 
 	app := fiber.New()
 	app.Use(cors.New(cors.Config{
@@ -24,6 +32,7 @@ func main() {
 	}))
 
 	routes.NoteRoutes(app, noteController)
+	routes.WebSocketRoutes(app, wsController)
 
 	app.Listen(":4000")
 }
