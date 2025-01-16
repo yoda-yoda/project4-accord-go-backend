@@ -13,6 +13,7 @@ import (
 
 type WebSocketController struct {
 	connections        map[*websocket.Conn]*webrtc.PeerConnection
+	dataChannels       map[*websocket.Conn]*webrtc.DataChannel
 	iceCandidateQueue  map[*websocket.Conn][]webrtc.ICECandidateInit
 	participantService *service.ParticipantService
 	wsService          *service.WebSocketService
@@ -25,6 +26,8 @@ func NewWebSocketController(
 	return &WebSocketController{
 		participantService: participantService,
 		wsService:          wsService, // 추가된 필드 초기화
+		connections:        make(map[*websocket.Conn]*webrtc.PeerConnection),
+		dataChannels:       make(map[*websocket.Conn]*webrtc.DataChannel),
 	}
 }
 
@@ -107,111 +110,105 @@ func (wsc *WebSocketController) HandleWebRTC(c *websocket.Conn) {
 
 		switch payload["type"] {
 		case "offer":
-			log.Println("Processing WebRTC Offer...")
-			sdp, ok := payload["sdp"].(string)
-			if !ok {
-				log.Println("Invalid SDP format")
-				continue
-			}
-
-			offer := webrtc.SessionDescription{
-				Type: webrtc.SDPTypeOffer,
-				SDP:  sdp,
-			}
-
-			peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
-				ICEServers: []webrtc.ICEServer{
-					{URLs: []string{"stun:stun.l.google.com:19302"}},
-					{
-						URLs:       []string{"turn:127.0.0.1:3478"},
-						Username:   "user",
-						Credential: "pass",
-					},
-				},
-			})
-			if err != nil {
-				log.Println("Failed to create PeerConnection:", err)
-				break
-			}
-
-			// 연결 저장
-			wsc.connections[c] = peerConnection
-
-			// Offer 설정
-			if err := peerConnection.SetRemoteDescription(offer); err != nil {
-				log.Println("Failed to set remote description:", err)
-				break
-			}
-
-			// Answer 생성
-			answer, err := peerConnection.CreateAnswer(nil)
-			if err != nil {
-				log.Println("Failed to create Answer:", err)
-				break
-			}
-
-			// LocalDescription 설정
-			if err := peerConnection.SetLocalDescription(answer); err != nil {
-				log.Println("Failed to set local description:", err)
-				break
-			}
-
-			// Answer 전송
-			response := map[string]interface{}{
-				"type": "answer",
-				"sdp":  answer.SDP,
-			}
-			log.Printf("Generated Answer SDP: %s", answer.SDP)
-			responseJSON, _ := json.Marshal(response)
-			c.WriteMessage(websocket.TextMessage, responseJSON)
-
-			// 큐에 있는 ICE Candidate 처리
-			if candidates, exists := wsc.iceCandidateQueue[c]; exists {
-				for _, candidate := range candidates {
-					if err := peerConnection.AddICECandidate(candidate); err != nil {
-						log.Println("Failed to add ICE Candidate from queue:", err)
-					}
-				}
-				delete(wsc.iceCandidateQueue, c)
-			}
+			handleOffer(wsc, c, payload)
 
 		case "iceCandidate":
-			candidateMap, ok := payload["candidate"].(map[string]interface{})
-			if !ok {
-				log.Println("Invalid candidate format")
-				continue
-			}
-
-			sdpMLineIndex := uint16(candidateMap["sdpMLineIndex"].(float64))
-			candidate := webrtc.ICECandidateInit{
-				Candidate:        candidateMap["candidate"].(string),
-				SDPMid:           func(s string) *string { return &s }(candidateMap["sdpMid"].(string)),
-				SDPMLineIndex:    &sdpMLineIndex,
-				UsernameFragment: func(s string) *string { return &s }(candidateMap["usernameFragment"].(string)),
-			}
-
-			if pc, exists := wsc.connections[c]; exists && pc != nil {
-				if err := pc.AddICECandidate(candidate); err != nil {
-					log.Println("Failed to add ICE Candidate:", err)
-				}
-				log.Println("Added ICE Candidate:", candidate)
-			} else {
-				response := map[string]interface{}{
-					"type":          "iceCandidate",
-					"status":        "received",
-					"candidate":     candidate,
-					"sdpMid":        *candidate.SDPMid,
-					"sdpMLineIndex": *candidate.SDPMLineIndex,
-				}
-				responseJSON, _ := json.Marshal(response)
-				c.WriteMessage(websocket.TextMessage, responseJSON)
-				wsc.iceCandidateQueue[c] = append(wsc.iceCandidateQueue[c], candidate)
-				log.Println("Queued ICE Candidate:", candidate)
-			}
-
-		default:
-			log.Println("Unknown message type:", payload["type"])
+			handleIceCandidate(wsc, c, payload)
 		}
+	}
+}
+
+func handleOffer(wsc *WebSocketController, c *websocket.Conn, payload map[string]interface{}) {
+	sdp, _ := payload["sdp"].(string)
+
+	offer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP:  sdp,
+	}
+
+	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{URLs: []string{"stun:stun.l.google.com:19302"}},
+			{
+				URLs:       []string{"turn:127.0.0.1:3478"},
+				Username:   "user",
+				Credential: "pass",
+			},
+		},
+	})
+	if err != nil {
+		log.Println("Failed to create PeerConnection:", err)
+		return
+	}
+
+	wsc.connections[c] = peerConnection
+
+	// Handle DataChannel creation
+	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
+		log.Printf("New DataChannel %s\n", d.Label())
+
+		// 저장
+		wsc.dataChannels[c] = d
+
+		// Handle DataChannel messages
+		d.OnMessage(func(msg webrtc.DataChannelMessage) {
+			log.Printf("Received message: %s\n", string(msg.Data))
+
+			// Broadcast message to other clients
+			for conn, channel := range wsc.dataChannels {
+				if conn != c && channel != nil {
+					err := channel.SendText(string(msg.Data))
+					if err != nil {
+						log.Printf("Failed to send message to client: %v", err)
+					}
+				}
+			}
+		})
+	})
+
+	err = peerConnection.SetRemoteDescription(offer)
+	if err != nil {
+		log.Println("Failed to set remote description:", err)
+		return
+	}
+
+	answer, err := peerConnection.CreateAnswer(nil)
+	if err != nil {
+		log.Println("Failed to create Answer:", err)
+		return
+	}
+
+	err = peerConnection.SetLocalDescription(answer)
+	if err != nil {
+		log.Println("Failed to set local description:", err)
+		return
+	}
+
+	response := map[string]interface{}{
+		"type": "answer",
+		"sdp":  answer.SDP,
+	}
+	responseMsg, err := json.Marshal(response)
+	if err != nil {
+		log.Println("Marshal error:", err)
+		return
+	}
+	if err := c.WriteMessage(websocket.TextMessage, responseMsg); err != nil {
+		log.Println("Write error:", err)
+		return
+	}
+}
+
+func handleIceCandidate(wsc *WebSocketController, c *websocket.Conn, payload map[string]interface{}) {
+	candidateMap, _ := payload["candidate"].(map[string]interface{})
+	candidate := webrtc.ICECandidateInit{
+		Candidate: candidateMap["candidate"].(string),
+		SDPMid:    func(s string) *string { return &s }(candidateMap["sdpMid"].(string)),
+	}
+
+	pc, exists := wsc.connections[c]
+	if exists {
+		pc.AddICECandidate(candidate)
 	}
 }
 
