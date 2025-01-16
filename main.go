@@ -27,6 +27,9 @@ func main() {
 
 	wsController := controllers.NewWebSocketController(participantService, wsService)
 
+	canvasRepo := repository.NewCanvasRepository(collection)
+	canvasController := controllers.NewCanvasController(canvasRepo)
+
 	app := fiber.New()
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "http://localhost:3000",
@@ -35,6 +38,7 @@ func main() {
 
 	routes.NoteRoutes(app, noteController)
 	routes.WebSocketRoutes(app, wsController)
+	routes.CanvasRoutes(app, canvasController)
 
 	log.Println("Starting server on port 4000...")
 	if err := app.Listen(":4000"); err != nil {
