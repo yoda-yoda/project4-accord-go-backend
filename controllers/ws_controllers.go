@@ -15,10 +15,17 @@ type WebSocketController struct {
 	connections        map[*websocket.Conn]*webrtc.PeerConnection
 	iceCandidateQueue  map[*websocket.Conn][]webrtc.ICECandidateInit
 	participantService *service.ParticipantService
+	wsService          *service.WebSocketService
 }
 
-func NewWebSocketController(service *service.ParticipantService) *WebSocketController {
-	return &WebSocketController{participantService: service}
+func NewWebSocketController(
+	participantService *service.ParticipantService,
+	wsService *service.WebSocketService, // 추가 의존성
+) *WebSocketController {
+	return &WebSocketController{
+		participantService: participantService,
+		wsService:          wsService, // 추가된 필드 초기화
+	}
 }
 
 func (wsc *WebSocketController) HandleWebSocket(c *websocket.Conn) {
@@ -154,6 +161,7 @@ func (wsc *WebSocketController) HandleWebRTC(c *websocket.Conn) {
 				"type": "answer",
 				"sdp":  answer.SDP,
 			}
+			log.Printf("Generated Answer SDP: %s", answer.SDP)
 			responseJSON, _ := json.Marshal(response)
 			c.WriteMessage(websocket.TextMessage, responseJSON)
 
@@ -188,10 +196,74 @@ func (wsc *WebSocketController) HandleWebRTC(c *websocket.Conn) {
 				}
 				log.Println("Added ICE Candidate:", candidate)
 			} else {
-				// 큐에 추가
+				response := map[string]interface{}{
+					"type":          "iceCandidate",
+					"status":        "received",
+					"candidate":     candidate,
+					"sdpMid":        *candidate.SDPMid,
+					"sdpMLineIndex": *candidate.SDPMLineIndex,
+				}
+				responseJSON, _ := json.Marshal(response)
+				c.WriteMessage(websocket.TextMessage, responseJSON)
 				wsc.iceCandidateQueue[c] = append(wsc.iceCandidateQueue[c], candidate)
 				log.Println("Queued ICE Candidate:", candidate)
 			}
+
+		default:
+			log.Println("Unknown message type:", payload["type"])
+		}
+	}
+}
+
+func (wsc *WebSocketController) HandleWebSocketForYjs(c *websocket.Conn) {
+	defer func() {
+		wsc.wsService.RemoveClient(c)
+		c.Close()
+	}()
+
+	log.Println("WebSocket connected")
+
+	for {
+		_, msg, err := c.ReadMessage()
+		if err != nil {
+			log.Println("Read error:", err)
+			break
+		}
+
+		var payload map[string]interface{}
+		if err := json.Unmarshal(msg, &payload); err != nil {
+			log.Println("Error parsing message:", err)
+			continue
+		}
+
+		switch payload["type"] {
+		case "subscribe":
+			room, ok := payload["room"].(string)
+			if !ok || room == "" {
+				log.Println("Invalid room in subscribe message")
+				continue
+			}
+			wsc.wsService.Subscribe(room, c)
+
+		case "publish":
+			room, ok := payload["room"].(string)
+			if !ok || room == "" {
+				log.Println("Invalid room in publish message")
+				continue
+			}
+			message, ok := payload["message"].(string)
+			if !ok {
+				log.Println("Invalid message in publish message")
+				continue
+			}
+			wsc.wsService.Publish(room, []byte(message))
+		case "ping":
+			message, ok := payload["message"].(string)
+			if !ok {
+				log.Println("Invalid message in publish message")
+				continue
+			}
+			wsc.wsService.Publish("pong", []byte(message))
 
 		default:
 			log.Println("Unknown message type:", payload["type"])

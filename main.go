@@ -17,6 +17,7 @@ func main() {
 	redisClient := configs.ConnectRedis()
 	participantRepo := repository.NewRedisParticipantRepository(redisClient)
 	participantService := service.NewParticipantService(participantRepo)
+	wsService := service.NewWebSocketService()
 
 	client := configs.ConnectMongo()
 	collection := client.Database("mydb").Collection("notes")
@@ -24,7 +25,7 @@ func main() {
 	noteRepo := repository.NewNoteRepository(collection)
 	noteController := controllers.NewNoteController(noteRepo)
 
-	wsController := controllers.NewWebSocketController(participantService)
+	wsController := controllers.NewWebSocketController(participantService, wsService)
 
 	app := fiber.New()
 	app.Use(cors.New(cors.Config{
