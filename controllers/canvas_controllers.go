@@ -34,5 +34,8 @@ func (cc *CanvasController) GetCanvasByTeamID(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to find canvas"})
 	}
+	if canvas.ID == "" {
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{})
+	}
 	return c.Status(fiber.StatusOK).JSON(canvas)
 }
