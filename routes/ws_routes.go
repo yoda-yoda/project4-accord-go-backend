@@ -7,8 +7,8 @@ import (
 	"github.com/gofiber/websocket/v2"
 )
 
-func WebSocketRoutes(app *fiber.App, wsController *controllers.WebSocketController) {
+func WebSocketRoutes(app *fiber.App, wsController *controllers.WebSocketController, audioController *controllers.AudioSocketController) {
 	app.Get("/ws", websocket.New(wsController.HandleWebSocket))
 	app.Get("/webrtc", websocket.New(wsController.HandleWebRTC))
-	app.Get("/webrtc/:room", websocket.New(wsController.HandleWebSocketForYjs))
+	app.Get("/webrtc/audio", websocket.New(audioController.HandleWebRTC))
 }

@@ -73,6 +73,7 @@ func (wsc *WebSocketController) HandleWebSocket(c *websocket.Conn) {
 				log.Println("Error removing participant:", err)
 			}
 		default:
+
 			log.Println("Unknown message type:", data.Type)
 		}
 	}

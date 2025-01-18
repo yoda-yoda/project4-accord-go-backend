@@ -26,6 +26,7 @@ func main() {
 	noteController := controllers.NewNoteController(noteRepo)
 
 	wsController := controllers.NewWebSocketController(participantService, wsService)
+	audioController := controllers.NewAudioSocketController()
 
 	canvasRepo := repository.NewCanvasRepository(collection)
 	canvasController := controllers.NewCanvasController(canvasRepo)
@@ -37,7 +38,7 @@ func main() {
 	}))
 
 	routes.NoteRoutes(app, noteController)
-	routes.WebSocketRoutes(app, wsController)
+	routes.WebSocketRoutes(app, wsController, audioController)
 	routes.CanvasRoutes(app, canvasController)
 
 	log.Println("Starting server on port 4000...")
