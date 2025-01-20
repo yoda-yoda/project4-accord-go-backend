@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"log"
+	"strings"
 
 	"go-server/repository"
 	service "go-server/services"
@@ -17,15 +18,18 @@ type WebSocketController struct {
 	iceCandidateQueue  map[*websocket.Conn][]webrtc.ICECandidateInit
 	participantService *service.ParticipantService
 	wsService          *service.WebSocketService
+	noteService        *service.NoteService
 }
 
 func NewWebSocketController(
 	participantService *service.ParticipantService,
-	wsService *service.WebSocketService, // 추가 의존성
+	wsService *service.WebSocketService,
+	noteService *service.NoteService,
 ) *WebSocketController {
 	return &WebSocketController{
 		participantService: participantService,
-		wsService:          wsService, // 추가된 필드 초기화
+		wsService:          wsService,
+		noteService:        noteService,
 		connections:        make(map[*websocket.Conn]*webrtc.PeerConnection),
 		dataChannels:       make(map[*websocket.Conn]*webrtc.DataChannel),
 	}
@@ -148,6 +152,12 @@ func handleOffer(wsc *WebSocketController, c *websocket.Conn, payload map[string
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		log.Printf("New DataChannel %s\n", d.Label())
 
+		label := d.Label()
+		var teamID string
+		if parts := strings.Split(label, "/"); len(parts) == 2 && parts[0] == "note" {
+			teamID = parts[1]
+		}
+
 		// 저장
 		wsc.dataChannels[c] = d
 
@@ -155,16 +165,85 @@ func handleOffer(wsc *WebSocketController, c *websocket.Conn, payload map[string
 		d.OnMessage(func(msg webrtc.DataChannelMessage) {
 			log.Printf("Received message: %s\n", string(msg.Data))
 
-			// Broadcast message to other clients
-			for conn, channel := range wsc.dataChannels {
-				if conn != c && channel != nil {
-					err := channel.SendText(string(msg.Data))
-					if err != nil {
-						log.Printf("Failed to send message to client: %v", err)
+			// 1) JSON 파싱
+			var m map[string]interface{}
+			if err := json.Unmarshal(msg.Data, &m); err != nil {
+				log.Println("Failed to unmarshal JSON from data channel:", err)
+				return
+			}
+
+			// 예: { "type": "note", "version": 3, "steps": [...], "clientID": "xxx" }
+			msgType, _ := m["type"].(string)
+			if msgType == "note" {
+				// 2) 서버 관점에서 필요한 로직(추가 저장이나 버전 관리 등)이 있으면 처리
+				change := service.Change{
+					Type: "note",
+				}
+				// version
+				if v, ok := m["version"].(float64); ok {
+					change.Version = int(v)
+				}
+				// clientID
+				if cid, ok := m["clientID"].(string); ok {
+					change.ClientID = cid
+				}
+				// steps
+				if steps, ok := m["steps"].([]interface{}); ok {
+					for _, s := range steps {
+						// s는 {"stepType":"replace","from":0,"to":2,"slice":{...}}
+						stepBytes, _ := json.Marshal(s)
+						var step service.Step
+						if err := json.Unmarshal(stepBytes, &step); err == nil {
+							change.Steps = append(change.Steps, step)
+						}
+					}
+				}
+
+				updatedDoc, newVersion, err := wsc.noteService.HandleNoteChange(teamID, change)
+				if err != nil {
+					log.Println("Error applying note change:", err)
+					return
+				}
+
+				// 3) 보내준 클라이언트(혹은 전체)에게 "ackSteps" 형태로 응답
+
+				// ACK
+				ack := map[string]interface{}{
+					"type":     "ackSteps",
+					"version":  newVersion,
+					"clientID": change.ClientID,
+					"doc":      updatedDoc,
+				}
+				ackBytes, err := json.Marshal(ack)
+				if err == nil {
+					// **지금 메시지를 보낸 원 클라이언트**에게도 돌려주기
+					// (여기선 `d`가 해당 DataChannel)
+					if sendErr := d.SendText(string(ackBytes)); sendErr != nil {
+						log.Println("Failed to send ack to the sender:", sendErr)
+					}
+
+					// 그리고 다른 클라이언트에게도 보내고 싶다면:
+					for conn, channel := range wsc.dataChannels {
+						if conn != c && channel != nil {
+							_ = channel.SendText(string(ackBytes))
+						}
+					}
+				} else {
+					log.Println("Failed to marshal ackSteps:", err)
+				}
+			} else {
+				// note가 아닌 경우(기존 broadcast 로직)
+				for conn, channel := range wsc.dataChannels {
+					if conn != c && channel != nil {
+						err := channel.SendText(string(msg.Data))
+						if err != nil {
+							log.Printf("Failed to send message to client: %v", err)
+						}
 					}
 				}
 			}
 		})
+
 	})
 
 	err = peerConnection.SetRemoteDescription(offer)

@@ -23,9 +23,10 @@ func main() {
 	collection := client.Database("mydb").Collection("notes")
 
 	noteRepo := repository.NewNoteRepository(collection)
+	noteService := service.NewNoteService(noteRepo)
 	noteController := controllers.NewNoteController(noteRepo)
 
-	wsController := controllers.NewWebSocketController(participantService, wsService)
+	wsController := controllers.NewWebSocketController(participantService, wsService, noteService)
 	audioController := controllers.NewAudioSocketController()
 
 	canvasRepo := repository.NewCanvasRepository(collection)
