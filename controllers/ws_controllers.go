@@ -3,347 +3,140 @@ package controllers
 import (
 	"encoding/json"
 	"log"
-	"strings"
-
-	"go-server/repository"
-	service "go-server/services"
+	"sync"
 
 	"github.com/gofiber/websocket/v2"
-	"github.com/pion/webrtc/v4"
 )
 
+// SignalMessage: y-webrtc가 사용하는 시그널링 메시지 구조
+// 예) {"type":"signal","to":"...","from":"...","room":"...","data":{...}}
+type SignalMessage struct {
+	Type string                 `json:"type"`
+	To   string                 `json:"to"`
+	From string                 `json:"from"`
+	Room string                 `json:"room"`
+	Data map[string]interface{} `json:"data"`
+}
+
+// WebSocketController: (예시) 방(room) 단위로 WebSocket 접속을 관리
 type WebSocketController struct {
-	connections        map[*websocket.Conn]*webrtc.PeerConnection
-	dataChannels       map[*websocket.Conn]*webrtc.DataChannel
-	iceCandidateQueue  map[*websocket.Conn][]webrtc.ICECandidateInit
-	participantService *service.ParticipantService
-	wsService          *service.WebSocketService
-	noteService        *service.NoteService
+	mu    sync.Mutex
+	rooms map[string]map[*websocket.Conn]bool
 }
 
-func NewWebSocketController(
-	participantService *service.ParticipantService,
-	wsService *service.WebSocketService,
-	noteService *service.NoteService,
-) *WebSocketController {
+// NewWebSocketController: 간단 초기화
+func NewWebSocketController() *WebSocketController {
 	return &WebSocketController{
-		participantService: participantService,
-		wsService:          wsService,
-		noteService:        noteService,
-		connections:        make(map[*websocket.Conn]*webrtc.PeerConnection),
-		dataChannels:       make(map[*websocket.Conn]*webrtc.DataChannel),
+		rooms: make(map[string]map[*websocket.Conn]bool),
 	}
 }
 
-func (wsc *WebSocketController) HandleWebSocket(c *websocket.Conn) {
-	var peerConnection *webrtc.PeerConnection
-	defer func() {
-		if peerConnection != nil {
-			peerConnection.Close()
-		}
-		c.Close()
-	}()
-	log.Println("WebSocket connected")
+// HandleYWebRTC: y-webrtc 시그널링 전용 WebSocket 핸들러
+func (wsc *WebSocketController) HandleYWebRTC(c *websocket.Conn) {
+	// 1) Query "room" 파라미터
+	roomID := c.Query("room")
+	if roomID == "" {
+		log.Println("[y-webrtc] No 'room' query param provided, closing.")
+		_ = c.Close()
+		return
+	}
 
+	// 2) 방에 접속
+	wsc.joinRoom(roomID, c)
+	defer wsc.leaveRoom(roomID, c)
+
+	log.Printf("[y-webrtc] Client joined room=%s\n", roomID)
+
+	// 3) 메시지 루프
 	for {
-		_, msg, err := c.ReadMessage()
+		msgType, msg, err := c.ReadMessage()
 		if err != nil {
-			log.Println("Read error:", err)
+			log.Printf("[y-webrtc] Read error: %v\n", err)
 			break
 		}
-
-		// 메시지 파싱
-		var data struct {
-			Type        string                 `json:"type"`
-			TeamID      string                 `json:"team_id"`
-			DataType    string                 `json:"data_type"` // note, canvas, voice
-			Participant repository.Participant `json:"participant"`
-		}
-		if err := json.Unmarshal(msg, &data); err != nil {
-			log.Println("Invalid message format:", err)
+		if msgType != websocket.TextMessage {
+			// y-webrtc는 주로 TextMessage 사용. 아닌 경우 무시
 			continue
 		}
 
-		// 메시지 처리
-		switch data.Type {
-		case "addParticipant":
-			err := wsc.participantService.AddParticipant(data.TeamID, data.DataType, data.Participant)
-			if err != nil {
-				log.Println("Error adding participant:", err)
-			}
-		case "removeParticipant":
-			err := wsc.participantService.RemoveParticipant(data.TeamID, data.DataType, data.Participant.ID)
-			if err != nil {
-				log.Println("Error removing participant:", err)
-			}
-		default:
-
-			log.Println("Unknown message type:", data.Type)
-		}
-	}
-}
-
-func (wsc *WebSocketController) HandleWebRTC(c *websocket.Conn) {
-	if wsc.connections == nil {
-		wsc.connections = make(map[*websocket.Conn]*webrtc.PeerConnection)
-		wsc.iceCandidateQueue = make(map[*websocket.Conn][]webrtc.ICECandidateInit)
-	}
-
-	defer func() {
-		if pc, ok := wsc.connections[c]; ok {
-			pc.Close()
-			delete(wsc.connections, c)
-		}
-		delete(wsc.iceCandidateQueue, c)
-		c.Close()
-	}()
-
-	log.Println("WebRTC WebSocket connected")
-
-	for {
-		_, msg, err := c.ReadMessage()
-		if err != nil {
-			log.Println("Read error:", err)
-			break
-		}
-
-		var payload map[string]interface{}
-		if err := json.Unmarshal(msg, &payload); err != nil {
-			log.Println("Error parsing message:", err)
+		// y-webrtc에서 오는 메시지를 구조체로 파싱 (type, from, to, room, data...)
+		var signal SignalMessage
+		if err := json.Unmarshal(msg, &signal); err != nil {
+			log.Printf("[y-webrtc] JSON parse error: %v\n", err)
 			continue
 		}
 
-		switch payload["type"] {
-		case "offer":
-			handleOffer(wsc, c, payload)
-
-		case "iceCandidate":
-			handleIceCandidate(wsc, c, payload)
-		}
-	}
-}
-
-func handleOffer(wsc *WebSocketController, c *websocket.Conn, payload map[string]interface{}) {
-	sdp, _ := payload["sdp"].(string)
-
-	offer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  sdp,
-	}
-
-	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
-			{
-				URLs:       []string{"turn:127.0.0.1:3478"},
-				Username:   "user",
-				Credential: "pass",
-			},
-		},
-	})
-	if err != nil {
-		log.Println("Failed to create PeerConnection:", err)
-		return
-	}
-
-	wsc.connections[c] = peerConnection
-
-	// Handle DataChannel creation
-	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
-		log.Printf("New DataChannel %s\n", d.Label())
-
-		label := d.Label()
-		var teamID string
-		if parts := strings.Split(label, "/"); len(parts) == 2 && parts[0] == "note" {
-			teamID = parts[1]
+		// room 필드가 비어있다면 보완
+		if signal.Room == "" {
+			signal.Room = roomID
 		}
 
-		// 저장
-		wsc.dataChannels[c] = d
+		// 4) y-webrtc가 'type: "signal"'을 보냈다면, 그대로 방 전체에 브로드캐스트
+		switch signal.Type {
+		case "signal":
+			// offer/answer/iceCandidate 등 협업에 필요한 핵심 메시지
+			wsc.broadcastSignal(roomID, c, msg)
 
-		// Handle DataChannel messages
-		d.OnMessage(func(msg webrtc.DataChannelMessage) {
-			log.Printf("Received message: %s\n", string(msg.Data))
-
-			// 1) JSON 파싱
-			var m map[string]interface{}
-			if err := json.Unmarshal(msg.Data, &m); err != nil {
-				log.Println("Failed to unmarshal JSON from data channel:", err)
-				return
-			}
-
-			// 예: { "type": "note", "version": 3, "steps": [...], "clientID": "xxx" }
-			msgType, _ := m["type"].(string)
-			if msgType == "note" {
-				// 2) 서버 관점에서 필요한 로직(추가 저장이나 버전 관리 등)이 있으면 처리
-				change := service.Change{
-					Type: "note",
-				}
-				// version
-				if v, ok := m["version"].(float64); ok {
-					change.Version = int(v)
-				}
-				// clientID
-				if cid, ok := m["clientID"].(string); ok {
-					change.ClientID = cid
-				}
-				// steps
-				if steps, ok := m["steps"].([]interface{}); ok {
-					for _, s := range steps {
-						// s는 {"stepType":"replace","from":0,"to":2,"slice":{...}}
-						stepBytes, _ := json.Marshal(s)
-						var step service.Step
-						if err := json.Unmarshal(stepBytes, &step); err == nil {
-							change.Steps = append(change.Steps, step)
-						}
-					}
-				}
-
-				updatedDoc, newVersion, err := wsc.noteService.HandleNoteChange(teamID, change)
-				if err != nil {
-					log.Println("Error applying note change:", err)
-					return
-				}
-
-				// 3) 보내준 클라이언트(혹은 전체)에게 "ackSteps" 형태로 응답
-
-				// ACK
-				ack := map[string]interface{}{
-					"type":     "ackSteps",
-					"version":  newVersion,
-					"clientID": change.ClientID,
-					"doc":      updatedDoc,
-				}
-				ackBytes, err := json.Marshal(ack)
-				if err == nil {
-					// **지금 메시지를 보낸 원 클라이언트**에게도 돌려주기
-					// (여기선 `d`가 해당 DataChannel)
-					if sendErr := d.SendText(string(ackBytes)); sendErr != nil {
-						log.Println("Failed to send ack to the sender:", sendErr)
-					}
-
-					// 그리고 다른 클라이언트에게도 보내고 싶다면:
-					for conn, channel := range wsc.dataChannels {
-						if conn != c && channel != nil {
-							_ = channel.SendText(string(ackBytes))
-						}
-					}
-				} else {
-					log.Println("Failed to marshal ackSteps:", err)
-				}
-			} else {
-				// note가 아닌 경우(기존 broadcast 로직)
-				for conn, channel := range wsc.dataChannels {
-					if conn != c && channel != nil {
-						err := channel.SendText(string(msg.Data))
-						if err != nil {
-							log.Printf("Failed to send message to client: %v", err)
-						}
-					}
-				}
-			}
-		})
-
-	})
-
-	err = peerConnection.SetRemoteDescription(offer)
-	if err != nil {
-		log.Println("Failed to set remote description:", err)
-		return
-	}
-
-	answer, err := peerConnection.CreateAnswer(nil)
-	if err != nil {
-		log.Println("Failed to create Answer:", err)
-		return
-	}
-
-	err = peerConnection.SetLocalDescription(answer)
-	if err != nil {
-		log.Println("Failed to set local description:", err)
-		return
-	}
-
-	response := map[string]interface{}{
-		"type": "answer",
-		"sdp":  answer.SDP,
-	}
-	responseMsg, err := json.Marshal(response)
-	if err != nil {
-		log.Println("Marshal error:", err)
-		return
-	}
-	if err := c.WriteMessage(websocket.TextMessage, responseMsg); err != nil {
-		log.Println("Write error:", err)
-		return
-	}
-}
-
-func handleIceCandidate(wsc *WebSocketController, c *websocket.Conn, payload map[string]interface{}) {
-	candidateMap, _ := payload["candidate"].(map[string]interface{})
-	candidate := webrtc.ICECandidateInit{
-		Candidate: candidateMap["candidate"].(string),
-		SDPMid:    func(s string) *string { return &s }(candidateMap["sdpMid"].(string)),
-	}
-
-	pc, exists := wsc.connections[c]
-	if exists {
-		pc.AddICECandidate(candidate)
-	}
-}
-
-func (wsc *WebSocketController) HandleWebSocketForYjs(c *websocket.Conn) {
-	defer func() {
-		wsc.wsService.RemoveClient(c)
-		c.Close()
-	}()
-
-	log.Println("WebSocket connected")
-
-	for {
-		_, msg, err := c.ReadMessage()
-		if err != nil {
-			log.Println("Read error:", err)
-			break
-		}
-
-		var payload map[string]interface{}
-		if err := json.Unmarshal(msg, &payload); err != nil {
-			log.Println("Error parsing message:", err)
-			continue
-		}
-
-		switch payload["type"] {
-		case "subscribe":
-			room, ok := payload["room"].(string)
-			if !ok || room == "" {
-				log.Println("Invalid room in subscribe message")
-				continue
-			}
-			wsc.wsService.Subscribe(room, c)
-
-		case "publish":
-			room, ok := payload["room"].(string)
-			if !ok || room == "" {
-				log.Println("Invalid room in publish message")
-				continue
-			}
-			message, ok := payload["message"].(string)
-			if !ok {
-				log.Println("Invalid message in publish message")
-				continue
-			}
-			wsc.wsService.Publish(room, []byte(message))
-		case "ping":
-			message, ok := payload["message"].(string)
-			if !ok {
-				log.Println("Invalid message in publish message")
-				continue
-			}
-			wsc.wsService.Publish("pong", []byte(message))
+		// 필요하다면, "participants"나 "awareness" 등 다른 타입도 그대로 중계 가능
+		case "participants":
+			// 예: 참가자 목록 메시지도 as-is로 뿌리고 싶다면
+			wsc.broadcastSignal(roomID, c, msg)
 
 		default:
-			log.Println("Unknown message type:", payload["type"])
+			// 그 외 타입은 무시하거나, 로그만 찍기
+			log.Printf("[y-webrtc] Unknown type=%s message=%s\n", signal.Type, string(msg))
+		}
+	}
+}
+
+// joinRoom: 해당 roomID에 WebSocket 연결 추가
+func (wsc *WebSocketController) joinRoom(roomID string, conn *websocket.Conn) {
+	wsc.mu.Lock()
+	defer wsc.mu.Unlock()
+
+	if wsc.rooms[roomID] == nil {
+		wsc.rooms[roomID] = make(map[*websocket.Conn]bool)
+	}
+	wsc.rooms[roomID][conn] = true
+}
+
+// leaveRoom: roomID에서 해당 WebSocket 연결 제거
+func (wsc *WebSocketController) leaveRoom(roomID string, conn *websocket.Conn) {
+	wsc.mu.Lock()
+	defer wsc.mu.Unlock()
+
+	if clients, ok := wsc.rooms[roomID]; ok {
+		if _, exists := clients[conn]; exists {
+			delete(clients, conn)
+			_ = conn.Close()
+			log.Printf("[y-webrtc] Client left room=%s\n", roomID)
+		}
+		if len(clients) == 0 {
+			delete(wsc.rooms, roomID)
+		}
+	}
+}
+
+// broadcastSignal: 받은 메시지를 방 안의 다른 클라이언트에게 그대로 전송
+func (wsc *WebSocketController) broadcastSignal(roomID string, sender *websocket.Conn, rawMessage []byte) {
+	wsc.mu.Lock()
+	defer wsc.mu.Unlock()
+
+	clients, ok := wsc.rooms[roomID]
+	if !ok {
+		return
+	}
+
+	// 여기서는 rawMessage(msg) 그 자체를 그대로 중계
+	for conn := range clients {
+		// 자기 자신(sender)에게는 보내지 않음
+		if conn == sender {
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, rawMessage); err != nil {
+			log.Println("[y-webrtc] Write error:", err)
+			_ = conn.Close()
+			delete(clients, conn)
 		}
 	}
 }

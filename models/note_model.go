@@ -6,6 +6,7 @@ type Note struct {
 	ID        string    `bson:"_id,omitempty" json:"id,omitempty"`
 	TeamID    string    `bson:"team_id" json:"team_id"`
 	Version   int       `bson:"version"`
+	Title     string    `bson:"title" json:"title"`
 	Note      string    `bson:"note" json:"note"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 }

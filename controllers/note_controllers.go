@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"net/url"
 
 	"encoding/base64"
 	"go-server/models"
@@ -41,12 +42,33 @@ func decodeNoteBase64(encodedNote string) ([]byte, error) {
 	return decodedData, nil
 }
 
-func (nc *NoteController) GetNoteByTeamID(c *fiber.Ctx) error {
+func (nc *NoteController) GetNotesByTeamID(c *fiber.Ctx) error {
 	teamID := c.Params("teamId")
-	note, err := nc.repo.FindNoteByTeamID(teamID)
+	notes, err := nc.repo.FindNotesByTeamID(teamID)
 	if err != nil {
-		return c.Status(fiber.StatusOK).JSON(fiber.Map{"note": nil})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to find notes"})
 	}
+	return c.Status(fiber.StatusOK).JSON(notes)
+}
 
+func (nc *NoteController) GetNoteByTeamIDAndTitle(c *fiber.Ctx) error {
+	teamID := c.Params("teamId")
+	title := c.Params("title")
+	decodedTitle, err := url.QueryUnescape(title)
+	note, err := nc.repo.FindNoteByTeamIDAndTitle(teamID, decodedTitle)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Note not found"})
+	}
 	return c.Status(fiber.StatusOK).JSON(note)
+}
+
+func (nc *NoteController) UpdateNoteTitle(c *fiber.Ctx) error {
+	teamID := c.Params("teamId")
+	oldTitle := c.Params("oldTitle")
+	newTitle := c.Params("newTitle")
+
+	if err := nc.repo.UpdateNoteTitle(teamID, oldTitle, newTitle); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update note title"})
+	}
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }

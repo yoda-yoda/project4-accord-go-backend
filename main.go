@@ -5,7 +5,6 @@ import (
 	"go-server/controllers"
 	"go-server/repository"
 	"go-server/routes"
-	service "go-server/services"
 	"log"
 
 	"github.com/gofiber/fiber/v2"
@@ -14,19 +13,13 @@ import (
 
 func main() {
 
-	redisClient := configs.ConnectRedis()
-	participantRepo := repository.NewRedisParticipantRepository(redisClient)
-	participantService := service.NewParticipantService(participantRepo)
-	wsService := service.NewWebSocketService()
-
 	client := configs.ConnectMongo()
 	collection := client.Database("mydb").Collection("notes")
 
 	noteRepo := repository.NewNoteRepository(collection)
-	noteService := service.NewNoteService(noteRepo)
 	noteController := controllers.NewNoteController(noteRepo)
 
-	wsController := controllers.NewWebSocketController(participantService, wsService, noteService)
+	wsController := controllers.NewWebSocketController()
 	audioController := controllers.NewAudioSocketController()
 
 	canvasRepo := repository.NewCanvasRepository(collection)
