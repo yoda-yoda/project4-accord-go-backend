@@ -21,11 +21,12 @@ func (cc *CanvasController) CreateCanvas(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
 	}
 
-	if err := cc.repo.SaveCanvas(canvas); err != nil {
+	objectID, err := cc.repo.SaveCanvas(canvas)
+	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save canvas"})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(canvas)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": objectID})
 }
 
 func (cc *CanvasController) GetCanvasByID(c *fiber.Ctx) error {
@@ -47,12 +48,24 @@ func (cc *CanvasController) GetCanvasesByTeamID(c *fiber.Ctx) error {
 }
 
 func (cc *CanvasController) UpdateCanvasTitle(c *fiber.Ctx) error {
-	teamID := c.Params("teamId")
-	oldTitle := c.Params("oldTitle")
-	newTitle := c.Params("newTitle")
+	id := c.Params("id")
+	var request struct {
+		NewTitle string `json:"new_title"`
+	}
+	if err := c.BodyParser(&request); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
+	}
 
-	if err := cc.repo.UpdateCanvasTitle(teamID, oldTitle, newTitle); err != nil {
+	if err := cc.repo.UpdateCanvasTitle(id, request.NewTitle); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update canvas title"})
+	}
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
+}
+
+func (cc *CanvasController) DeleteCanvasByID(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if err := cc.repo.DeleteCanvasByID(id); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete canvas"})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "success"})
 }

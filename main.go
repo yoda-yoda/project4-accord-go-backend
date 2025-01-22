@@ -15,6 +15,7 @@ func main() {
 
 	client := configs.ConnectMongo()
 	collection := client.Database("mydb").Collection("notes")
+	collectionCanvas := client.Database("mydb").Collection("canvases")
 
 	noteRepo := repository.NewNoteRepository(collection)
 	noteController := controllers.NewNoteController(noteRepo)
@@ -22,7 +23,7 @@ func main() {
 	wsController := controllers.NewWebSocketController()
 	audioController := controllers.NewAudioSocketController()
 
-	canvasRepo := repository.NewCanvasRepository(collection)
+	canvasRepo := repository.NewCanvasRepository(collectionCanvas)
 	canvasController := controllers.NewCanvasController(canvasRepo)
 
 	app := fiber.New()
