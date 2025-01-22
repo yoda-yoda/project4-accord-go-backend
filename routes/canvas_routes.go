@@ -8,5 +8,7 @@ import (
 
 func CanvasRoutes(app *fiber.App, canvasController *controllers.CanvasController) {
 	app.Post("/canvas", canvasController.CreateCanvas)
-	app.Get("/canvas/:teamId", canvasController.GetCanvasByTeamID)
+	app.Get("/canvas/:id", canvasController.GetCanvasByID)
+	app.Get("/canvases/:teamId", canvasController.GetCanvasesByTeamID)
+	app.Put("/canvas/:teamId/:oldTitle/:newTitle", canvasController.UpdateCanvasTitle)
 }
