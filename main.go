@@ -13,14 +13,19 @@ import (
 
 func main() {
 
+	configs.ConnectRedis()
 	client := configs.ConnectMongo()
+	redisClient := configs.GetRedisClient()
+
 	collection := client.Database("mydb").Collection("notes")
 	collectionCanvas := client.Database("mydb").Collection("canvases")
 
 	noteRepo := repository.NewNoteRepository(collection)
 	noteController := controllers.NewNoteController(noteRepo)
 
-	wsController := controllers.NewWebSocketController()
+	participantRepo := repository.NewParticipantRepository(redisClient)
+	participantsController := controllers.NewParticipantsController(participantRepo)
+
 	audioController := controllers.NewAudioSocketController()
 
 	canvasRepo := repository.NewCanvasRepository(collectionCanvas)
@@ -33,7 +38,7 @@ func main() {
 	}))
 
 	routes.NoteRoutes(app, noteController)
-	routes.WebSocketRoutes(app, wsController, audioController)
+	routes.WebSocketRoutes(app, participantsController, audioController)
 	routes.CanvasRoutes(app, canvasController)
 
 	log.Println("Starting server on port 4000...")
