@@ -6,12 +6,25 @@ import (
 	"go-server/repository"
 	"go-server/routes"
 	"log"
+	"os"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 func main() {
+
+	os.Setenv("CONSUL_ADDRESS", "http://localhost:8500")
+	err := configs.RegisterService(
+		"go-server",
+		"go-server",
+		"localhost",
+		4000,
+		"http://172.30.1.53:4000/health",
+	)
+	if err != nil {
+		log.Fatalf("Consul service registration failed: %v", err)
+	}
 
 	configs.ConnectRedis()
 	client := configs.ConnectMongo()
@@ -40,6 +53,12 @@ func main() {
 	routes.NoteRoutes(app, noteController)
 	routes.WebSocketRoutes(app, participantsController, audioController)
 	routes.CanvasRoutes(app, canvasController)
+
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status": "UP",
+		})
+	})
 
 	log.Println("Starting server on port 4000...")
 	if err := app.Listen(":4000"); err != nil {
