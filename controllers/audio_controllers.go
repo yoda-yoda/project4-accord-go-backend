@@ -10,28 +10,21 @@ import (
 )
 
 type AudioSocketController struct {
-	connections map[*websocket.Conn]*webrtc.PeerConnection
-	tracksMap   map[*websocket.Conn][]*webrtc.TrackLocalStaticRTP
 	mu          sync.Mutex
+	teams       map[string]map[*websocket.Conn]*webrtc.PeerConnection
+	teamsTracks map[string]map[*websocket.Conn][]*webrtc.TrackLocalStaticRTP
 }
 
 func NewAudioSocketController() *AudioSocketController {
 	return &AudioSocketController{
-		connections: make(map[*websocket.Conn]*webrtc.PeerConnection),
-		tracksMap:   make(map[*websocket.Conn][]*webrtc.TrackLocalStaticRTP),
+		teams:       make(map[string]map[*websocket.Conn]*webrtc.PeerConnection),
+		teamsTracks: make(map[string]map[*websocket.Conn][]*webrtc.TrackLocalStaticRTP),
 	}
 }
 
 func (wsc *AudioSocketController) HandleWebRTC(c *websocket.Conn) {
 	defer func() {
-		wsc.mu.Lock()
-		if pc, ok := wsc.connections[c]; ok {
-			pc.Close()
-			delete(wsc.connections, c)
-		}
-		delete(wsc.tracksMap, c)
-		wsc.mu.Unlock()
-
+		wsc.cleanupConnection(c)
 		c.Close()
 	}()
 
@@ -61,8 +54,34 @@ func (wsc *AudioSocketController) HandleWebRTC(c *websocket.Conn) {
 	}
 }
 
+func (asc *AudioSocketController) cleanupConnection(c *websocket.Conn) {
+	asc.mu.Lock()
+	defer asc.mu.Unlock()
+
+	// 모든 팀을 돌면서 해당 conn이 있는지 찾고 제거
+	for teamID, connMap := range asc.teams {
+		if pc, ok := connMap[c]; ok {
+			pc.Close()
+			delete(connMap, c)
+			if len(connMap) == 0 {
+				delete(asc.teams, teamID)
+			}
+
+			// 트랙 맵도 제거
+			if trackMap, ok2 := asc.teamsTracks[teamID]; ok2 {
+				delete(trackMap, c)
+				if len(trackMap) == 0 {
+					delete(asc.teamsTracks, teamID)
+				}
+			}
+			break
+		}
+	}
+}
+
 // 클라이언트가 처음 보낸 Offer를 처리 -> 서버가 Answer
 func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[string]interface{}) {
+	teamID, _ := payload["teamId"].(string)
 	sdp, _ := payload["sdp"].(string)
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -99,9 +118,9 @@ func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[str
 		wsc.handleServerNegotiation(c, peerConnection)
 	})
 
-	// 2) OnTrack: 클라이언트가 오디오를 보내면, 서버는 그 RTP를 다른 피어에게 중계
+	// (2) OnTrack -> 같은 팀의 다른 피어들에게만 RTP 중계
 	peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("Got remote track from conn=%p, ID=%s, SSRC=%d\n", c, remoteTrack.ID(), remoteTrack.SSRC())
+		log.Printf("Got remote track from team=%s conn=%p, trackID=%s\n", teamID, c, remoteTrack.ID())
 
 		localTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
@@ -114,23 +133,22 @@ func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[str
 		}
 
 		wsc.mu.Lock()
-		// 다른 PeerConnection에 localTrack을 AddTrack
-		for otherConn, otherPC := range wsc.connections {
+		// 같은 팀만 순회
+		for otherConn, otherPC := range wsc.teams[teamID] {
 			if otherConn == c {
-				// 자기자신 제외
 				continue
 			}
 			if sender, addErr := otherPC.AddTrack(localTrack); addErr != nil {
 				log.Printf("AddTrack error: %v\n", addErr)
 			} else {
-				log.Printf("Forward track to conn=%p via sender=%v\n", otherConn, sender)
+				log.Printf("Forward track to team=%s conn=%p via sender=%v\n", teamID, otherConn, sender)
 			}
 		}
 		// 이 conn이 소유한 localTrack 목록에 저장
-		wsc.tracksMap[c] = append(wsc.tracksMap[c], localTrack)
+		wsc.teamsTracks[teamID][c] = append(wsc.teamsTracks[teamID][c], localTrack)
 		wsc.mu.Unlock()
 
-		// RTP 포워딩
+		// RTP를 localTrack으로 계속 포워딩
 		go func() {
 			rtpBuf := make([]byte, 1400)
 			for {
@@ -147,10 +165,17 @@ func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[str
 		}()
 	})
 
-	// 3) 맵에 등록
+	// (3) 팀 맵에 등록
 	wsc.mu.Lock()
-	wsc.connections[c] = peerConnection
-	wsc.tracksMap[c] = []*webrtc.TrackLocalStaticRTP{}
+	if wsc.teams[teamID] == nil {
+		wsc.teams[teamID] = make(map[*websocket.Conn]*webrtc.PeerConnection)
+	}
+	if wsc.teamsTracks[teamID] == nil {
+		wsc.teamsTracks[teamID] = make(map[*websocket.Conn][]*webrtc.TrackLocalStaticRTP)
+	}
+
+	wsc.teams[teamID][c] = peerConnection
+	wsc.teamsTracks[teamID][c] = []*webrtc.TrackLocalStaticRTP{}
 	wsc.mu.Unlock()
 
 	// 4) SetRemoteDescription(offer) → CreateAnswer → SetLocalDescription(answer)
@@ -180,7 +205,7 @@ func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[str
 
 	// 6) 이미 존재하던 다른 사람들의 track도 이 유저에게 addTrack (재협상 필요)
 	wsc.mu.Lock()
-	for otherConn, otherLocalTracks := range wsc.tracksMap {
+	for otherConn, otherLocalTracks := range wsc.teamsTracks[teamID] {
 		if otherConn == c {
 			continue
 		}
@@ -197,51 +222,47 @@ func (wsc *AudioSocketController) handleOffer(c *websocket.Conn, payload map[str
 	// -> handleServerNegotiation(...)에서 re-offer를 보냄
 }
 
-// 서버가 OnNegotiationNeeded 될 때 -> re-offer를 만들어 클라이언트에게 전송
 func (wsc *AudioSocketController) handleServerNegotiation(c *websocket.Conn, pc *webrtc.PeerConnection) {
-	// 1) CreateOffer
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
-		log.Println("handleServerNegotiation: CreateOffer error:", err)
+		log.Println("CreateOffer error:", err)
 		return
 	}
 	if err := pc.SetLocalDescription(offer); err != nil {
-		log.Println("handleServerNegotiation: SetLocalDescription error:", err)
+		log.Println("SetLocalDescription error:", err)
 		return
 	}
-	// 2) 보내기
+
 	msg := map[string]interface{}{
 		"type": "offer",
 		"sdp":  offer.SDP,
 	}
 	data, _ := json.Marshal(msg)
-	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Println("handleServerNegotiation: WriteMessage error:", err)
-		return
-	}
-	log.Println("[Server -> Client] re-Offer sent")
+	_ = c.WriteMessage(websocket.TextMessage, data)
+	log.Println("[Server -> Client] re-offer sent")
 }
 
 // 클라이언트가 re-offer에 대한 answer(혹은 서버 offer에 대한 answer)를 보냈을 때
 func (wsc *AudioSocketController) handleAnswer(c *websocket.Conn, payload map[string]interface{}) {
 	wsc.mu.Lock()
-	pc := wsc.connections[c]
-	wsc.mu.Unlock()
-	if pc == nil {
-		log.Println("handleAnswer: no PeerConnection found for this client")
-		return
-	}
+	defer wsc.mu.Unlock()
 
-	sdp, _ := payload["sdp"].(string)
-	answer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  sdp,
+	for _, connMap := range wsc.teams {
+		if pc, ok := connMap[c]; ok {
+			sdp, _ := payload["sdp"].(string)
+			answer := webrtc.SessionDescription{
+				Type: webrtc.SDPTypeAnswer,
+				SDP:  sdp,
+			}
+			if err := pc.SetRemoteDescription(answer); err != nil {
+				log.Println("handleAnswer: SetRemoteDescription error:", err)
+			} else {
+				log.Println("handleAnswer: remoteDescription set (answer)")
+			}
+			return
+		}
 	}
-	if err := pc.SetRemoteDescription(answer); err != nil {
-		log.Println("handleAnswer: SetRemoteDescription error:", err)
-	} else {
-		log.Println("handleAnswer: remoteDescription set (answer)")
-	}
+	log.Println("handleAnswer: no PeerConnection found for this client")
 }
 
 func (wsc *AudioSocketController) handleICECandidate(c *websocket.Conn, payload map[string]interface{}) {
@@ -250,13 +271,18 @@ func (wsc *AudioSocketController) handleICECandidate(c *websocket.Conn, payload 
 		Candidate: candidateMap["candidate"].(string),
 		SDPMid:    func(s string) *string { return &s }(candidateMap["sdpMid"].(string)),
 	}
-	wsc.mu.Lock()
-	pc := wsc.connections[c]
-	wsc.mu.Unlock()
 
-	if pc != nil {
-		if err := pc.AddICECandidate(candidate); err != nil {
-			log.Println("AddICECandidate error:", err)
+	wsc.mu.Lock()
+	defer wsc.mu.Unlock()
+
+	for _, connMap := range wsc.teams {
+		if pc, ok := connMap[c]; ok {
+			if pc != nil {
+				if err := pc.AddICECandidate(candidate); err != nil {
+					log.Println("AddICECandidate error:", err)
+				}
+			}
+			return
 		}
 	}
 }

@@ -37,7 +37,7 @@ func RegisterService(serviceID, serviceName, address string, port int, healthChe
 
 	consulAddress := os.Getenv("CONSUL_ADDRESS")
 	if consulAddress == "" {
-		consulAddress = "http://172.30.1.53:8500" // 기본값 설정
+		consulAddress = "http://172.30.1.64:8500" // 기본값 설정
 	}
 
 	url := fmt.Sprintf("%s/v1/agent/service/register", consulAddress)

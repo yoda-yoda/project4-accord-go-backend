@@ -20,7 +20,7 @@ func main() {
 		"go-server",
 		"localhost",
 		4000,
-		"http://172.30.1.53:4000/health",
+		"http://172.30.1.64:4000/health",
 	)
 	if err != nil {
 		log.Fatalf("Consul service registration failed: %v", err)
