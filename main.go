@@ -5,6 +5,8 @@ import (
 	"go-server/controllers"
 	"go-server/repository"
 	"go-server/routes"
+	"go-server/server"
+	"go-server/utils"
 	"log"
 	"os"
 
@@ -44,21 +46,30 @@ func main() {
 	canvasRepo := repository.NewCanvasRepository(collectionCanvas)
 	canvasController := controllers.NewCanvasController(canvasRepo)
 
+	store := utils.NewPublicKeyStore()
+
 	app := fiber.New()
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "http://localhost:3000",
 		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 	}))
 
-	routes.NoteRoutes(app, noteController)
+	routes.NoteRoutes(app, noteController, store)
 	routes.WebSocketRoutes(app, participantsController, audioController)
-	routes.CanvasRoutes(app, canvasController)
+	routes.CanvasRoutes(app, canvasController, store)
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "UP",
 		})
 	})
+
+	go func() {
+		if err := server.RunGRPCServer(store); err != nil {
+			log.Fatalf("Failed to start gRPC server: %v", err)
+		}
+		log.Println("gRPC server started")
+	}()
 
 	log.Println("Starting server on port 4000...")
 	if err := app.Listen(":4000"); err != nil {

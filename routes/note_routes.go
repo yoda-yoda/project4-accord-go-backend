@@ -2,14 +2,18 @@ package routes
 
 import (
 	"go-server/controllers"
+	middleware "go-server/middlewares"
+	"go-server/utils"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-func NoteRoutes(app *fiber.App, noteController *controllers.NoteController) {
-	app.Post("/note", noteController.CreateNote)
-	app.Get("/note/:id", noteController.GetNoteByID)
-	app.Get("/notes/:teamId", noteController.GetNotesByTeamID)
-	app.Put("/note/:id/title", noteController.UpdateNoteTitle)
-	app.Delete("/note/:id", noteController.DeleteNoteByID)
+func NoteRoutes(app *fiber.App, noteController *controllers.NoteController, store *utils.PublicKeyStore) {
+
+	noteGroup := app.Group("/note", middleware.JWTParser(store))
+	noteGroup.Post("/", noteController.CreateNote)
+	noteGroup.Get("/:id", noteController.GetNoteByID)
+	noteGroup.Get("/team/:teamId", noteController.GetNotesByTeamID)
+	noteGroup.Put("/:id/title", noteController.UpdateNoteTitle)
+	noteGroup.Delete("/:id", noteController.DeleteNoteByID)
 }

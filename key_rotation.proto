@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "org.noteam.be.grpc";
+option java_outer_classname = "KeyRotationProto";
+option go_package = "pkg/keyrotation";
+
+service KeyRotationNotifyService {
+  rpc NotifyKeyRolled(NotifyKeyRolledRequest) returns (NotifyKeyRolledResponse) {
+
+  }
+}
+
+message NotifyKeyRolledRequest {
+  string previousKid = 1;
+  string currentKid  = 2;
+  string rolledAt    = 3;
+  string currentPublicKeyPem = 4;
+}
+
+message NotifyKeyRolledResponse {
+  string message = 1;
+}
