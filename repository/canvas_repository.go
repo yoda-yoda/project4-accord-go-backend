@@ -11,6 +11,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type CanvasRepositoryInterface interface {
+	SaveCanvas(canvas models.Canvas) (string, error)
+	FindCanvasByID(id string) (models.Canvas, error)
+	FindCanvasesByTeamID(teamID string) ([]models.Canvas, error)
+	UpdateCanvasTitle(id, newTitle string) error
+	DeleteCanvasByID(id string) error
+}
+
 type CanvasRepository struct {
 	collection *mongo.Collection
 }

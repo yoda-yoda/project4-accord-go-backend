@@ -11,6 +11,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type NoteRepositoryInterface interface {
+	SaveNote(note models.Note) (string, error)
+	FindNoteByID(id string) (models.Note, error)
+	FindNotesByTeamID(teamID string) ([]models.Note, error)
+	UpdateNoteTitle(id, newTitle string) error
+	DeleteNoteByID(id string) error
+}
+
 type NoteRepository struct {
 	collection *mongo.Collection
 }

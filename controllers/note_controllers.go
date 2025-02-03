@@ -8,10 +8,10 @@ import (
 )
 
 type NoteController struct {
-	repo *repository.NoteRepository
+	repo repository.NoteRepositoryInterface
 }
 
-func NewNoteController(repo *repository.NoteRepository) *NoteController {
+func NewNoteController(repo repository.NoteRepositoryInterface) *NoteController {
 	return &NoteController{repo: repo}
 }
 

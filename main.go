@@ -10,8 +10,10 @@ import (
 	"log"
 	"os"
 
+	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -63,6 +65,8 @@ func main() {
 			"status": "UP",
 		})
 	})
+
+	app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
 
 	go func() {
 		if err := server.RunGRPCServer(store); err != nil {

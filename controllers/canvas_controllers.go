@@ -8,10 +8,10 @@ import (
 )
 
 type CanvasController struct {
-	repo *repository.CanvasRepository
+	repo repository.CanvasRepositoryInterface
 }
 
-func NewCanvasController(repo *repository.CanvasRepository) *CanvasController {
+func NewCanvasController(repo repository.CanvasRepositoryInterface) *CanvasController {
 	return &CanvasController{repo: repo}
 }
 
