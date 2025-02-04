@@ -10,10 +10,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/gofiber/adaptor/v2"
+	fiberprometheus "github.com/ansrivas/fiberprometheus/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -51,6 +50,13 @@ func main() {
 	store := utils.NewPublicKeyStore()
 
 	app := fiber.New()
+
+	p := fiberprometheus.New("go-server")
+
+	p.RegisterAt(app, "/metrics")
+
+	app.Use(p.Middleware)
+
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "http://localhost:3000",
 		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
@@ -65,8 +71,6 @@ func main() {
 			"status": "UP",
 		})
 	})
-
-	app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
 
 	go func() {
 		if err := server.RunGRPCServer(store); err != nil {
