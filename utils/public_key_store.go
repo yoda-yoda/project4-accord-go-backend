@@ -1,55 +1,85 @@
 package utils
 
 import (
+	"bytes"
+	"context"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
-	"sync"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// PublicKeyStore는 KID와 RSA 공개키를 매핑하는 저장소입니다.
 type PublicKeyStore struct {
-	keys map[string]*rsa.PublicKey
-	mu   sync.RWMutex
+	redisClient *redis.Client
+	previousKid string
 }
 
-// NewPublicKeyStore는 새로운 PublicKeyStore 인스턴스를 생성합니다.
-func NewPublicKeyStore() *PublicKeyStore {
+func NewPublicKeyStore(redisClient *redis.Client) *PublicKeyStore {
 	return &PublicKeyStore{
-		keys: make(map[string]*rsa.PublicKey),
+		redisClient: redisClient,
 	}
 }
 
-// AddOrUpdateKey는 PEM 형식의 공개키를 파싱하여 저장소에 추가하거나 업데이트합니다.
-func (store *PublicKeyStore) AddOrUpdateKey(kid, pemStr string) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
+func MarshalRSAPublicKey(pubKey *rsa.PublicKey) ([]byte, error) {
+	pubKeyBytes := x509.MarshalPKCS1PublicKey(pubKey)
+	var pemBuffer bytes.Buffer
+	pem.Encode(&pemBuffer, &pem.Block{
+		Type:  "RSA PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	})
+	return pemBuffer.Bytes(), nil
+}
 
+func (store *PublicKeyStore) AddOrUpdateKey(ctx context.Context, kid, pemStr string) error {
 	// PEM 파싱
 	pubKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(pemStr))
 	if err != nil {
 		return fmt.Errorf("failed to parse RSA public key: %w", err)
 	}
 
-	// Map에 저장(기존 kid가 있어도 덮어씀)
-	store.keys[kid] = pubKey
+	// Redis에 저장
+	pubKeyBytes, err := MarshalRSAPublicKey(pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal RSA public key: %w", err)
+	}
+
+	if store.previousKid != "" && store.previousKid != kid {
+		err := store.RemoveKey(ctx, store.previousKid)
+		if err != nil {
+			return fmt.Errorf("failed to remove previous key from store: %w", err)
+		}
+	}
+
+	err = store.redisClient.Set(ctx, kid, pubKeyBytes, 0).Err()
+	if err != nil {
+		return err
+	}
+
+	store.previousKid = kid
+
 	return nil
 }
 
-func (store *PublicKeyStore) RemoveKey(kid string) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	delete(store.keys, kid)
+func (store *PublicKeyStore) RemoveKey(ctx context.Context, kid string) error {
+	return store.redisClient.Del(ctx, kid).Err()
 }
 
-func (store *PublicKeyStore) GetKey(kid string) (*rsa.PublicKey, error) {
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-
-	key, exists := store.keys[kid]
-	if !exists {
-		return nil, fmt.Errorf("public key not found for kid: %s", kid)
+func (store *PublicKeyStore) GetKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	pubKeyBytes, err := store.redisClient.Get(ctx, kid).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, fmt.Errorf("public key not found for kid: %s", kid)
+		}
+		return nil, err
 	}
-	return key, nil
+
+	pubKey, err := jwt.ParseRSAPublicKeyFromPEM(pubKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
+	}
+
+	return pubKey, nil
 }

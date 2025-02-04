@@ -47,7 +47,7 @@ func main() {
 	canvasRepo := repository.NewCanvasRepository(collectionCanvas)
 	canvasController := controllers.NewCanvasController(canvasRepo)
 
-	store := utils.NewPublicKeyStore()
+	store := utils.NewPublicKeyStore(redisClient)
 
 	app := fiber.New()
 

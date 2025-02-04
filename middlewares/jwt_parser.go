@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"go-server/utils"
 	"strings"
@@ -58,7 +59,7 @@ func ParseJWT(tokenString string, store *utils.PublicKeyStore) (*CustomClaims, e
 	}
 
 	// 2) Store에서 public key 가져오기
-	pubKey, err := store.GetKey(kid)
+	pubKey, err := store.GetKey(context.Background(), kid)
 	if err != nil {
 		return nil, err
 	}
