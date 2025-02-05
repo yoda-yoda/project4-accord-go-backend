@@ -13,13 +13,13 @@ import (
 )
 
 type ParticipantsController struct {
-	participantRepo *repository.ParticipantRepository
+	participantRepo repository.ParticipantRepositoryInterface
 	connections     map[*websocket.Conn]string
 	rooms           map[string]map[*websocket.Conn]bool
 	mu              sync.Mutex
 }
 
-func NewParticipantsController(participantRepo *repository.ParticipantRepository) *ParticipantsController {
+func NewParticipantsController(participantRepo repository.ParticipantRepositoryInterface) *ParticipantsController {
 	return &ParticipantsController{
 		participantRepo: participantRepo,
 		connections:     make(map[*websocket.Conn]string),

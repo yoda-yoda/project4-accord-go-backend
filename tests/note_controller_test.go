@@ -69,15 +69,26 @@ func TestCreateNote_InvalidJSON(t *testing.T) {
 func TestGetNoteByID_Success(t *testing.T) {
 	app := setupNoteApp()
 
-	req := httptest.NewRequest("GET", "/notes/12345", nil)
+	note1 := models.Note{
+		Title:  "New Note",
+		TeamID: "team123",
+		Note:   "Some note content",
+	}
+	body1, _ := json.Marshal(note1)
+	req1 := httptest.NewRequest("POST", "/notes", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	app.Test(req1, -1)
+
+	req := httptest.NewRequest("GET", "/notes/1", nil)
 	resp, err := app.Test(req, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
 
 	var note models.Note
 	_ = json.NewDecoder(resp.Body).Decode(&note)
-	assert.Equal(t, "12345", note.ID)
-	assert.Equal(t, "Test Note", note.Title)
+	assert.Equal(t, "1", note.ID)
+	assert.Equal(t, "New Note", note.Title)
 }
 
 func TestGetNoteByID_NotFound(t *testing.T) {
@@ -96,6 +107,17 @@ func TestGetNoteByID_NotFound(t *testing.T) {
 func TestGetNotesByTeamID(t *testing.T) {
 	app := setupNoteApp()
 
+	note1 := models.Note{
+		Title:  "New Note",
+		TeamID: "team123",
+		Note:   "Some note content",
+	}
+	body1, _ := json.Marshal(note1)
+	req1 := httptest.NewRequest("POST", "/notes", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	app.Test(req1, -1)
+
 	req := httptest.NewRequest("GET", "/notes/team/team123", nil)
 	resp, err := app.Test(req, -1)
 	assert.NoError(t, err)
@@ -103,18 +125,28 @@ func TestGetNotesByTeamID(t *testing.T) {
 
 	var notes []models.Note
 	_ = json.NewDecoder(resp.Body).Decode(&notes)
-	// 위 setup에서 team123에 "Test Note"를 넣었으므로 1개는 있을 것
-	// 추가로 POST 해도 되니 상황에 따라 테스트를 조절하세요.
+
 	assert.Len(t, notes, 1)
-	assert.Equal(t, "Test Note", notes[0].Title)
+	assert.Equal(t, "New Note", notes[0].Title)
 }
 
 func TestUpdateNoteTitle_Success(t *testing.T) {
 	app := setupNoteApp()
 
+	note1 := models.Note{
+		Title:  "New Note",
+		TeamID: "team123",
+		Note:   "Some note content",
+	}
+	body1, _ := json.Marshal(note1)
+	req1 := httptest.NewRequest("POST", "/notes", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	app.Test(req1, -1)
+
 	reqBody := map[string]string{"new_title": "Updated Title"}
 	body, _ := json.Marshal(reqBody)
-	req := httptest.NewRequest("PUT", "/notes/12345/title", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/notes/1/title", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req, -1)
@@ -124,14 +156,12 @@ func TestUpdateNoteTitle_Success(t *testing.T) {
 	var respBody map[string]string
 	_ = json.NewDecoder(resp.Body).Decode(&respBody)
 	assert.Equal(t, "success", respBody["status"])
-
-	// 실제로 변경되었는지 한번 더 확인 가능(목 리포지토리에서 재조회 등)
 }
 
 func TestUpdateNoteTitle_InvalidJSON(t *testing.T) {
 	app := setupNoteApp()
 
-	req := httptest.NewRequest("PUT", "/notes/12345/title", bytes.NewReader([]byte("invalid json")))
+	req := httptest.NewRequest("PUT", "/notes/1/title", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req, -1)
@@ -146,7 +176,18 @@ func TestUpdateNoteTitle_InvalidJSON(t *testing.T) {
 func TestDeleteNoteByID_Success(t *testing.T) {
 	app := setupNoteApp()
 
-	req := httptest.NewRequest("DELETE", "/notes/12345", nil)
+	note1 := models.Note{
+		Title:  "New Note",
+		TeamID: "team123",
+		Note:   "Some note content",
+	}
+	body1, _ := json.Marshal(note1)
+	req1 := httptest.NewRequest("POST", "/notes", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	app.Test(req1, -1)
+
+	req := httptest.NewRequest("DELETE", "/notes/1", nil)
 	resp, err := app.Test(req, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, fiber.StatusOK, resp.StatusCode)

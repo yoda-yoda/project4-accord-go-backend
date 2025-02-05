@@ -8,6 +8,11 @@ import (
 	"github.com/gofiber/websocket/v2"
 )
 
+type WSConn interface {
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
 // SignalMessage: y-webrtc가 사용하는 시그널링 메시지 구조
 // 예) {"type":"signal","to":"...","from":"...","room":"...","data":{...}}
 type SignalMessage struct {
@@ -21,13 +26,13 @@ type SignalMessage struct {
 // WebSocketController: (예시) 방(room) 단위로 WebSocket 접속을 관리
 type WebSocketController struct {
 	mu    sync.Mutex
-	rooms map[string]map[*websocket.Conn]bool
+	rooms map[string]map[WSConn]bool
 }
 
 // NewWebSocketController: 간단 초기화
 func NewWebSocketController() *WebSocketController {
 	return &WebSocketController{
-		rooms: make(map[string]map[*websocket.Conn]bool),
+		rooms: make(map[string]map[WSConn]bool),
 	}
 }
 
@@ -90,18 +95,18 @@ func (wsc *WebSocketController) HandleYWebRTC(c *websocket.Conn) {
 }
 
 // joinRoom: 해당 roomID에 WebSocket 연결 추가
-func (wsc *WebSocketController) joinRoom(roomID string, conn *websocket.Conn) {
+func (wsc *WebSocketController) joinRoom(roomID string, conn WSConn) {
 	wsc.mu.Lock()
 	defer wsc.mu.Unlock()
 
 	if wsc.rooms[roomID] == nil {
-		wsc.rooms[roomID] = make(map[*websocket.Conn]bool)
+		wsc.rooms[roomID] = make(map[WSConn]bool)
 	}
 	wsc.rooms[roomID][conn] = true
 }
 
 // leaveRoom: roomID에서 해당 WebSocket 연결 제거
-func (wsc *WebSocketController) leaveRoom(roomID string, conn *websocket.Conn) {
+func (wsc *WebSocketController) leaveRoom(roomID string, conn WSConn) {
 	wsc.mu.Lock()
 	defer wsc.mu.Unlock()
 
@@ -118,7 +123,7 @@ func (wsc *WebSocketController) leaveRoom(roomID string, conn *websocket.Conn) {
 }
 
 // broadcastSignal: 받은 메시지를 방 안의 다른 클라이언트에게 그대로 전송
-func (wsc *WebSocketController) broadcastSignal(roomID string, sender *websocket.Conn, rawMessage []byte) {
+func (wsc *WebSocketController) broadcastSignal(roomID string, sender WSConn, rawMessage []byte) {
 	wsc.mu.Lock()
 	defer wsc.mu.Unlock()
 

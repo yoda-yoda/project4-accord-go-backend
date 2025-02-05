@@ -1,4 +1,4 @@
-// go-server/repository/participant_repository.go
+// go-server/repository/redis_participant_repository.go
 package repository
 
 import (
@@ -15,6 +15,12 @@ import (
 // ParticipantRepository manages participants using Redis
 type ParticipantRepository struct {
 	redisClient *redis.Client
+}
+
+type ParticipantRepositoryInterface interface {
+	AddParticipant(ctx context.Context, teamID, kind string, p models.Participant) error
+	RemoveParticipant(ctx context.Context, teamID, kind, participantID string) error
+	GetParticipants(ctx context.Context, teamID, kind string) ([]models.Participant, error)
 }
 
 // NewParticipantRepository creates a new ParticipantRepository

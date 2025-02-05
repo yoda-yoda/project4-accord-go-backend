@@ -1,7 +1,24 @@
 package utils
 
-import "time"
+import (
+	"fmt"
+	"sync"
+)
+
+var (
+	idCounter int
+	mu        sync.Mutex
+)
+
+func init() {
+	idCounter = 1
+}
 
 func GenerateID() string {
-	return time.Now().Format("20060102150405.000000")
+	mu.Lock()
+	defer mu.Unlock()
+
+	id := idCounter
+	idCounter++
+	return fmt.Sprintf("%d", id)
 }
